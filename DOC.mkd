@@ -27,6 +27,7 @@ You must assign `v` param on GET after first poll.
     cb: parent.chatx.cb
     logLevel: 1
     name: name 
+    pass: password or none
     url: url
     comment: comment
     entCookie: 1 or none
@@ -69,8 +70,8 @@ is..
       cap: ?
       name: Name
       eid: UserID? (use at pm)
-      linkUrl: LinkURL (redirect)
-      comment: comment
+      linkUrl: LinkURL (redirect); OPTIONAL
+      comment: comment; OPTIONAL
     logs: log array
       seqno: LogID?
       ts: TimeStamp
@@ -84,14 +85,15 @@ is..
       users: users
       roms: roms
     sts: ?
-    type: "diff" -> Add current, "replace" -> replace current, "noop" -> skip it.
+    type: "diff" -> Add current, "replace" -> replace current, "noop" -> skip it, "error" -> session expired.
 
 ## Post
 
 `http://ENDPOINT/send` with POST.
 
-    cb: parent.chatx.cb
-    msg: Message
-    color: #000000
-    fontSize: 
-    pm: eid or empty
+    cb:        parent.chatx.cb
+    msg:       Message
+    color:     #000000
+    fontSize:  empty
+    pm:        eid or empty
+
