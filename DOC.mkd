@@ -1,0 +1,97 @@
+# Whocares API?
+
+## Get Endpoint
+
+Access to `id.chatx.whocares.jp`.
+
+    <frame style="border:0;margin:0;padding:0" src="!!ENDPOINT!!" noresize="noresize" scrolling="no" frameborder="0" />
+
+Save Cookies.
+
+## First Poll
+
+Polling URL is `http://ENDPOINT/comet/poll`.
+
+Access to `http://POLL?v=`. and you will get "v" param and users, logs.
+
+You must assign `v` param on GET after first poll.
+
+    {"v":"0.0.0.0","information":{"icon":null,"msg":"","url":""},"users":[{"denyPm":false,"term":"Mac\/Safari","cap":false,"name":"sorah","eid":"97047960_341434"}],"count":{"roms":1,"users":1},"logs":[{"seqno":0,"ts":"00:00","tag":"name(term)さんが入室しました。","infoType":"enter","type":"info","user":"お知らせ"}],"sts":false,"type":"replace"}
+
+## Join
+
+`http://ENDPOINT/enter` with POST.
+
+    etm: (Time.now.to_f*1000).to_i
+    plaf: MacIntel,Unknown
+    cb: parent.chatx.cb
+    logLevel: 1
+    name: name 
+    url: url
+    comment: comment
+    entCookie: 1 or none
+    denyPm: 1 or none
+
+## Part
+
+`http://ENDPOINT/exit` with POST.
+
+    cb:parent.chatx.cb
+
+## Polling
+
+Access to `http://POLL?v=VPARAM`.
+
+    {"type" => "noop"}
+
+Retry.
+
+Sample: new post
+
+    {"v":"VPARAM","logs":[{"seqno":0,"ts":"00:00","color":"#000000","tag":"hogehoge (body here)","type":"msg","eid":"00000000_000000","user":"name"}],"sts":false,"type":"diff"}
+
+Sample: left, join
+
+    {"v":"VPARAM","users":[],"count":{"roms":2,"users":0},"logs":[{"seqno":341437,"ts":"18:42","tag":"sorah(Mac\/Safari)さんが退室しました。","infoType":"exit","type":"info","user":"お知らせ"}],"sts":false,"type":"diff"}
+    {"v":"VPARAM","users":[{"denyPm":false,"term":"Mac\/Safari","cap":false,"name":"sorah","eid":"00000000_000000"}],"count":{"roms":1,"users":1},"logs":[{"seqno":000000,"ts":"18:42","tag":"sorah(Mac\/Safari)さんが入室しました。","infoType":"enter","type":"info","user":"お知らせ"}],"sts":false,"type":"diff"}
+    {"v":"VPARAM","users":[],"count":{"roms":1,"users":0},"logs":[{"seqno":000000,"ts":"00:00","tag":"sorah(Mac\/Safari)さんは行方不明になりました。","infoType":"disappear","type":"info","user":"お知らせ"}],"sts":false,"type":"diff"}
+
+Sample: pm
+
+    {"v":"VPARAM","logs":[{"seqno":000000,"toUser":"sorah","ts":"00:00","color":"#000000","tag":"hi","type":"msg","eid":"00000000_000000","user":"sora_h"}],"sts":true,"type":"diff"}
+
+is..
+
+    v: VPARAM. save and must use at next polling.
+    users: user array. Replace always
+      denyPm: Deny PM?
+      term: UserAgent
+      cap: ?
+      name: Name
+      eid: UserID? (use at pm)
+      linkUrl: LinkURL (redirect)
+      comment: comment
+    logs: log array
+      seqno: LogID?
+      ts: TimeStamp
+      tag: body
+      type: "info" or "msg"
+      infoType: type; "disappear" => "行方不明"; "enter" => "入室"; "exit" => "退室"
+      toUser: pm to_username (not id); WHEN PM
+      user: username
+      eid: userid
+    count: always replace
+      users: users
+      roms: roms
+    sts: ?
+    type: "diff" -> Add current, "replace" -> replace current, "noop" -> skip it.
+
+## Post
+
+`http://ENDPOINT/send` with POST.
+
+    cb: parent.chatx.cb
+    msg: Message
+    color: #000000
+    fontSize: 
+    pm: eid or empty
