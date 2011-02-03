@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # whocares.rb
 # Author: Shota Fukumori (sora_h)
 # License: MIT License
@@ -28,6 +30,7 @@ require 'rubygems'
 require 'open-uri'
 require 'json'
 require 'date'
+require 'net/http'
 
 class Whocares
   @@debug = false
@@ -35,13 +38,16 @@ class Whocares
   def self.debug=(x); @@debug = x; end
 
   class ConnectError < Exception; end
+  class JoinFail < Exception; end
 
   module API
     module Joint
       def join(base="",params={})
-        base + self + "?" + params.map do |k,v|
+        a = ("?" + params.map do |k,v|
           "#{URI.escape(k.to_s)}=#{URI.escape(v.to_s)}"
-        end.join("&")
+        end.join("&"))
+
+        base + self + (a == "?" ? "" : a)
       end
     end
 
@@ -73,7 +79,9 @@ class Whocares
     @hooks = {}
     @count = {}
     @users = []
+    @old_users = @users
     @log = []
+    @joined = false
   end
 
   def connect
@@ -100,17 +108,22 @@ class Whocares
 
   def disconnect
     d "Disconnect"
+    part if @joined
+    sleep 2
     poll_stop
     @connected = false
     @endpoint = nil
     @cookie = nil
     @users = []
+    @old_users = @users
     @count = {}
+    @joined =false
     @log = []
   end
 
   def join
     connect unless @connected
+    return if @joined
 
     j = URI.parse(API::JOIN.join(@endpoint))
 
@@ -127,20 +140,28 @@ class Whocares
     d "Join", param
 
     Net::HTTP.start(j.host,j.port) do |http|
-      http.post(j.path, form(param),
-                "Cookie" => @cookie.join)
+      a = http.post(j.path, form(param),"Cookie" => @cookie.join).body
+      unless /"result": true/ =~ a
+        b = a.match(/"err": "(.+?)"/)
+        raise JoinFail, b ? b.captures[0] : "no error"
+      end
     end
+    open(@url, "Cookie" => @cookie.join) {|io| io.read }
+    @joined = true
   end
 
   def part
+    return unless @joined
     j = URI.parse(API::PART.join(@endpoint))
     Net::HTTP.start(j.host,j.port) do |http|
       http.post(j.path, form("cb" => "parent.chatx.cb"),
                 "Cookie" => @cookie.join)
     end
+    @joined = false
   end
 
   def post(body, option={})
+    return unless @joined
     j = URI.parse(API::POST.join(@endpoint))
     params = {
       "cb" => "parent.chatx.cb",
@@ -152,32 +173,42 @@ class Whocares
     params["color"] = option[:color] if option[:color]
     eid = option[:pm]   || option[:eid] || \
           option[:user] || option[:to]
-    params["eid"] = u(eid) if eid
+    params["pm"] = u(eid).id if eid
 
     d "Post", params
 
     Net::HTTP.start(j.host,j.port) do |http|
-      http.post(j.path, form(params),
-                "Cookie" => @cookie.join)
+      p @url
+      open(@url, "Cookie" => @cookie.join) {|io| io.read }
+      a = http.post(j.path, form(params),
+                    "Cookie" => @cookie.join)
+      d "Posted", a.body
     end
   end
 
   def hook(name, option={}, &block)
     @hooks[name] ||= []
-    @hooks[name] << {:option => option, :proc => block}
+    i = @hooks[name].size
+    @hooks[name] << {:option => option, :proc => block, :id => i}
+    [name,i]
+  end
+  
+  def remove_hook(name, i)
+    @hooks[name].delete_at(i)
     self
   end
 
-  def user(id)
-    @users.find do |x|
+  def user(id, old=false)
+    a = old ? @old_users : @users
+    a.find do |x|
       x.id == id
-    end || @users.find do |x|
+    end || a.find do |x|
       x.name == id
     end
   end
   alias u user
 
-  attr_reader :hooks, :users, :count, :log
+  attr_reader :hooks, :users, :count, :log, :connected, :joined
 
 
   private
@@ -198,8 +229,9 @@ class Whocares
     @polling = Thread.start do
       begin
         loop do
-          d "Poll.."
+          d "Poll..", @v
           poll API::POLL.join(@endpoint, :v => @v)
+          d "Poll!!", @v
           sleep 0.2
         end
       rescue Exception => e
@@ -214,64 +246,90 @@ class Whocares
     @polling = nil
   end
 
+  def reconnect
+    Thread.new do
+      call_hook :will_reconnect
+      disconnect
+      sleep 1
+      connect
+      call_hook :reconnected
+    end
+  end
+
+
   def poll(url)
-    open(url, {"Cookie" => @cookie.join}) do |io|
-      j = JSON.parse(io.read) rescue return
+    #open(url, {"Cookie" => @cookie.join}) do |io|
+    a = URI.parse(url)
+    d "Poll", a
+    begin
+      h = Net::HTTP.new(a.host,a.port)
+      h.read_timeout = 10000000
+      b = h.get(a.path+"?"+a.query, "Cookie" => @cookie.join).body
+    rescue Timeout::Error
+      reconnect
+      return
+    end
+    j = JSON.parse(b.force_encoding("UTF-8")) rescue return
+    d "Poll!", j
+    d "Poll!", @v, j["v"]
 
-      d "Poll", j
+    @v = j["v"] if j["v"]
 
-      @v = j["v"] if j["v"]
+    return if j["type"] == "noop"
 
-      return if j["type"] == "noop"
+    if j["type"] == "error"
+      reconnect
+      return
+    end
 
-      if j["type"] == "error"
-        Thread.new do
-          call_hook :will_reconnect
-          disconnect
-          sleep 1
-          connect
-          call_hook :reconnected
-        end
-        return
+    if j["users"]
+      @old_users = @users.dup
+      @users = j["users"].map do |u|
+        User.new(u)
       end
+    end
 
-      if j["users"]
-        @users = j["users"].map do |u|
-          User.new(u)
-        end
-      end
-
-      if j["logs"]
-        case j["type"]
-        when "diff"
-          @log.unshift(*(j["logs"].map do |l|
-            h = process_log(l)
-            if h[:type] == :info
-              call_hook(:new_message, h) {|opt| h[:with_info] }
-              call_hook(:new_info, h)
+    if j["logs"]
+      case j["type"]
+      when "diff"
+        @log.unshift(*(j["logs"].map do |l|
+          h = process_log(l)
+          if h[:type] == :info
+            call_hook(:new_message, h) {|opt| opt[:with_info] }
+            call_hook(:new_info, h)
+          else
+            if h[:to] && h[:to].name == @option[:name]
+              call_hook(:new_message, h) {|opt| opt[:with_pm] }
+              call_hook(:new_pm, h)
             else
+              d "!?", h[:to].name if h[:to]
               call_hook(:new_message, h)
             end
-            h
-          end))
-        when "replace"
-          @log = j["logs"].map do |l|
-            h = process_log(l)
-            if h[:type] == :info
-              call_hook(:replace_message, h) {|opt| h[:with_info] }
-              call_hook(:replace_info, h)
+          end
+          h
+        end))
+      when "replace"
+        @log = j["logs"].map do |l|
+          h = process_log(l)
+          if h[:type] == :info
+            call_hook(:replace_message, h) {|opt| h[:with_info] }
+            call_hook(:replace_info, h)
+          else
+            if h[:to] && h[:to].name == @option[:name] && !h[:all]
+              call_hook(:replace_message, h) {|opt| opt[:with_pm] }
+              call_hook(:replace_pm, h)
             else
               call_hook(:replace_message, h)
             end
-            h
           end
+          h
         end
       end
+    end
 
-      if j["count"]
-        [:users,:roms].each do |x|
-          @count[x] = j["count"][x.to_s] || @count[x] || 0
-        end
+    if j["count"]
+      [:users,:roms].each do |x|
+        @count[x] = j["count"][x.to_s] || @count[x] || 0
       end
     end
   end
@@ -287,10 +345,20 @@ class Whocares
     l[:id] = h["seqno"]
     l[:time] = Time.parse(h["ts"])
     l[:body] = h["tag"]
+    l[:body].gsub!(/<a target="_blank" rel="external" class="elink" href=".+?">/,"")
+    l[:body].gsub!(/<\/a>/,"")
     l[:type] = h["type"].to_sym 
     l[:info_type] = h["infoType"].to_sym if h["infoType"]
-    l[:to] = h["toUser"] if h["toUser"]
+    l[:to] = u(h["toUser"]) if h["toUser"]
+    l[:all] = (h["toUser"] == "入室者全員" && @option[:name] != "入室者全員")
     l[:user] = u(h["eid"])
+    d "Old-users", @old_users
+    d "Users", @users
+    if [:exit,:disappear].include?(l[:info_type])
+      l[:user] = (@old_users.map(&:id) - @users.map(&:id)).map{|i| u(i,true)}
+    elsif :enter == l[:info_type]
+      l[:user] = (@users.map(&:id) - @old_users.map(&:id)).map{|i| u(i)}
+    end
     l
   end
 
